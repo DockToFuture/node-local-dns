@@ -64,8 +64,11 @@ type iptablesRule struct {
 
 // CacheApp contains all the config required to run node-cache.
 type CacheApp struct {
-	iptables      [2]utiliptables.Interface // indexed by ipFamily: [ipv4], [ipv6]
-	iptablesRules [2][]iptablesRule         // indexed by ipFamily: [ipv4], [ipv6]
+	// In a dual-stack cluster node-cache listens on both an IPv4 and an IPv6
+	// address, so the iptables handle and rules used to manage them are tracked
+	// separately per family.
+	iptables      map[utilnet.IPFamily]utiliptables.Interface
+	iptablesRules map[utilnet.IPFamily][]iptablesRule
 	params        *ConfigParams
 	netifHandle   *netif.NetifManager
 	config        *NodeCacheConfig
@@ -74,17 +77,8 @@ type CacheApp struct {
 	selfProcess   *os.Process
 }
 
-// ipFamily indexes the per-family iptables interfaces and rule sets. In a
-// dual-stack cluster node-cache listens on both an IPv4 and an IPv6 address, so
-// rules and the iptables handle used to manage them are tracked separately per
-// family.
-const (
-	ipv4 int = iota
-	ipv6
-)
-
 // ipFamilies is the fixed set of families node-cache iterates over.
-var ipFamilies = []int{ipv4, ipv6}
+var ipFamilies = []utilnet.IPFamily{utilnet.IPv4, utilnet.IPv6}
 
 func isLockedErr(err error) bool {
 	return strings.Contains(err.Error(), "holding the xtables lock")
@@ -116,18 +110,12 @@ func (c *CacheApp) Init() {
 	c.params.SetupIptables = setupIptables
 }
 
-// ipFamilyOf returns the ipFamily index (ipv4 or ipv6) for the given IP.
-func ipFamilyOf(ip net.IP) int {
-	if utilnet.IsIPv6(ip) {
-		return ipv6
-	}
-	return ipv4
-}
-
 func (c *CacheApp) initIptables() {
+	c.iptables = make(map[utilnet.IPFamily]utiliptables.Interface)
+	c.iptablesRules = make(map[utilnet.IPFamily][]iptablesRule)
 	// using the localIPStr param since we need ip strings here
 	for _, localIP := range strings.Split(c.params.LocalIPStr, ",") {
-		family := ipFamilyOf(net.ParseIP(localIP))
+		family := utilnet.IPFamilyOfString(localIP)
 		c.iptablesRules[family] = append(c.iptablesRules[family], []iptablesRule{
 			// Match traffic destined for localIp:localPort and set the flows to be NOTRACKED, this skips connection tracking
 			{utiliptables.Table("raw"), utiliptables.ChainPrerouting, []string{"-p", "tcp", "-d", localIP,
@@ -165,11 +153,11 @@ func (c *CacheApp) initIptables() {
 	// Only instantiate an iptables handle for a family that actually has rules,
 	// so that on a single-stack node we never invoke ip6tables (or iptables)
 	// where the corresponding binary or kernel module may be absent.
-	if len(c.iptablesRules[ipv4]) > 0 {
-		c.iptables[ipv4] = utiliptables.New(utiliptables.ProtocolIPv4)
+	if len(c.iptablesRules[utilnet.IPv4]) > 0 {
+		c.iptables[utilnet.IPv4] = utiliptables.New(utiliptables.ProtocolIPv4)
 	}
-	if len(c.iptablesRules[ipv6]) > 0 {
-		c.iptables[ipv6] = utiliptables.New(utiliptables.ProtocolIPv6)
+	if len(c.iptablesRules[utilnet.IPv6]) > 0 {
+		c.iptables[utilnet.IPv6] = utiliptables.New(utiliptables.ProtocolIPv6)
 	}
 }
 
