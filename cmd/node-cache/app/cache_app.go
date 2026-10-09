@@ -14,6 +14,7 @@ limitations under the License.
 package app
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -113,9 +114,9 @@ func (c *CacheApp) Init() {
 func (c *CacheApp) initIptables() {
 	c.iptables = make(map[utilnet.IPFamily]utiliptables.Interface)
 	c.iptablesRules = make(map[utilnet.IPFamily][]iptablesRule)
-	// using the localIPStr param since we need ip strings here
-	for _, localIP := range strings.Split(c.params.LocalIPStr, ",") {
-		family := utilnet.IPFamilyOfString(localIP)
+	for _, ip := range c.params.LocalIPs {
+		localIP := ip.String()
+		family := utilnet.IPFamilyOf(ip)
 		c.iptablesRules[family] = append(c.iptablesRules[family], []iptablesRule{
 			// Match traffic destined for localIp:localPort and set the flows to be NOTRACKED, this skips connection tracking
 			{utiliptables.Table("raw"), utiliptables.ChainPrerouting, []string{"-p", "tcp", "-d", localIP,
@@ -188,26 +189,32 @@ func (c *CacheApp) TeardownNetworking() error {
 			}
 			for _, rule := range c.iptablesRules[family] {
 				exists := true
-				for exists == true {
+				for exists {
 					// check in a loop in case the same rule got added multiple times.
-					err = c.iptables[family].DeleteRule(rule.table, rule.chain, rule.args...)
-					if err != nil {
-						clog.Errorf("Failed deleting iptables rule %v, error - %v", rule, err)
-						handleIPTablesError(err)
+					if delErr := c.iptables[family].DeleteRule(rule.table, rule.chain, rule.args...); delErr != nil {
+						clog.Errorf("Failed deleting iptables rule %v, error - %v", rule, delErr)
+						handleIPTablesError(delErr)
+						err = errors.Join(err, delErr)
 					}
-					exists, err = c.iptables[family].EnsureRule(utiliptables.Prepend, rule.table, rule.chain, rule.args...)
-					if err != nil {
-						clog.Errorf("Failed checking iptables rule after deletion, rule - %v, error - %v", rule, err)
-						handleIPTablesError(err)
+					var ensureErr error
+					exists, ensureErr = c.iptables[family].EnsureRule(utiliptables.Prepend, rule.table, rule.chain, rule.args...)
+					if ensureErr != nil {
+						clog.Errorf("Failed checking iptables rule after deletion, rule - %v, error - %v", rule, ensureErr)
+						handleIPTablesError(ensureErr)
+						err = errors.Join(err, ensureErr)
 					}
 				}
 				// Delete the rule one last time since EnsureRule creates the rule if it doesn't exist
-				err = c.iptables[family].DeleteRule(rule.table, rule.chain, rule.args...)
+				if delErr := c.iptables[family].DeleteRule(rule.table, rule.chain, rule.args...); delErr != nil {
+					clog.Errorf("Failed deleting iptables rule %v, error - %v", rule, delErr)
+					handleIPTablesError(delErr)
+					err = errors.Join(err, delErr)
+				}
 			}
 		}
 	}
 	if c.params.SetupInterface {
-		err = c.netifHandle.RemoveDummyDevice(c.params.InterfaceName)
+		err = errors.Join(err, c.netifHandle.RemoveDummyDevice(c.params.InterfaceName))
 	}
 	return err
 }
@@ -311,6 +318,21 @@ func NewCacheApp(params *ConfigParams) (*CacheApp, error) {
 func toSvcEnv(svcName string) string {
 	envName := strings.Replace(svcName, "-", "_", -1)
 	return "$" + strings.ToUpper(envName) + "_SERVICE_HOST"
+}
+
+// ParseLocalIPs parses a comma-separated list of IP addresses. The addresses
+// may belong to different IP families (dual-stack); an error is returned if any
+// entry is not a valid IP address.
+func ParseLocalIPs(localIPStr string) ([]net.IP, error) {
+	var localIPs []net.IP
+	for _, ipstr := range strings.Split(localIPStr, ",") {
+		newIP := net.ParseIP(ipstr)
+		if newIP == nil {
+			return nil, fmt.Errorf("invalid localip specified - %q", ipstr)
+		}
+		localIPs = append(localIPs, newIP)
+	}
+	return localIPs, nil
 }
 
 // isFileExists returns true if a file exists with the given path

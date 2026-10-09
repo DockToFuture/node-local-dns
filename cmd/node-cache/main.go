@@ -16,10 +16,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"strconv"
-	"strings"
 
 	"sigs.k8s.io/node-local-dns/cmd/node-cache/app"
 
@@ -101,13 +99,11 @@ func parseAndValidateFlags() (*app.ConfigParams, error) {
 	flag.BoolVar(&params.TlsConfig.Enabled, "tls-enabled", false, "Enable TLS, defaults to false")
 	flag.Parse()
 
-	for _, ipstr := range strings.Split(params.LocalIPStr, ",") {
-		newIP := net.ParseIP(ipstr)
-		if newIP == nil {
-			return params, fmt.Errorf("invalid localip specified - %q", ipstr)
-		}
-		params.LocalIPs = append(params.LocalIPs, newIP)
+	localIPs, err := app.ParseLocalIPs(params.LocalIPStr)
+	if err != nil {
+		return params, err
 	}
+	params.LocalIPs = localIPs
 
 	// lookup specified dns port
 	f := flag.Lookup("dns.port")
