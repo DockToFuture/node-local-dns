@@ -78,9 +78,6 @@ type CacheApp struct {
 	selfProcess   *os.Process
 }
 
-// ipFamilies is the fixed set of families node-cache iterates over.
-var ipFamilies = []utilnet.IPFamily{utilnet.IPv4, utilnet.IPv6}
-
 func isLockedErr(err error) bool {
 	return strings.Contains(err.Error(), "holding the xtables lock")
 }
@@ -183,7 +180,7 @@ func (c *CacheApp) TeardownNetworking() error {
 	}
 	var err error
 	if c.params.SetupIptables {
-		for _, family := range ipFamilies {
+		for _, family := range []utilnet.IPFamily{utilnet.IPv4, utilnet.IPv6} {
 			if c.iptables[family] == nil {
 				continue
 			}
@@ -221,7 +218,7 @@ func (c *CacheApp) TeardownNetworking() error {
 
 func (c *CacheApp) setupNetworking() {
 	if c.params.SetupIptables {
-		for _, family := range ipFamilies {
+		for _, family := range []utilnet.IPFamily{utilnet.IPv4, utilnet.IPv6} {
 			if c.iptables[family] == nil {
 				continue
 			}
